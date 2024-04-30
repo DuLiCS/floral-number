@@ -562,7 +562,6 @@ for filename in os.listdir(img_directory):
         # Store the results
         all_lengths.append(length)
         all_branch_nums.append(branch_num)
-        1 == 1
 # Write the results to a CSV file
 csv_file_path = 'plant_measurements.csv'
 with open(csv_file_path, mode='w', newline='') as file:
