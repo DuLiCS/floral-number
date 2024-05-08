@@ -1,15 +1,16 @@
 import numpy as np
 from matplotlib import pyplot as plt
-from skimage import color, morphology, filters
+from skimage import color, morphology, filters, util, transform
 from skimage.filters import gaussian
 import csv
 import os
 import cv2
 from skimage import io
-
+from scipy.ndimage import convolve
+# 是否显示处理过程中的图像
 show_flag = 0
 
-
+# 函数：合并重叠的矩形，用于优化图像中的对象检测结果
 def merge_overlapping_rectangles(rectangles):
     changed = True
     while changed:
@@ -17,8 +18,10 @@ def merge_overlapping_rectangles(rectangles):
         for i in range(len(rectangles)):
             for j in range(i + 1, len(rectangles)):
                 if rectangles[i] and rectangles[j]:
+                    # 获取两个矩形的坐标和大小
                     x1, y1, w1, h1 = rectangles[i]
                     x2, y2, w2, h2 = rectangles[j]
+                    # 检查矩形是否重叠，并进行合并
                     if (x1 <= x2 + w2 and x1 + w1 >= x2 and y1 <= y2 + h2 and y1 + h1 >= y2):
                         min_x = min(x1, x2)
                         min_y = min(y1, y2)
@@ -28,10 +31,10 @@ def merge_overlapping_rectangles(rectangles):
                         rectangles[i] = new_rect
                         rectangles[j] = None
                         changed = True
-        rectangles = [r for r in rectangles if r]
+        rectangles = [r for r in rectangles if r]  # 移除已合并的矩形
     return rectangles
 
-
+# 函数：根据指定角度旋转图像
 def rotate_image(image, angle):
     (h, w) = image.shape[:2]
     center = (w // 2, h // 2)
@@ -39,41 +42,35 @@ def rotate_image(image, angle):
     rotated = cv2.warpAffine(image, M, (w, h))
     return rotated
 
-
+# 函数：匹配模板并在必要时旋转图像
 def match_template_and_rotate_if_necessary(image_path, template_path):
     img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
     template = cv2.imread(template_path, cv2.IMREAD_GRAYSCALE)
     if img is None or template is None:
-        print("Image or template not found.")
+        print("未找到图像或模板。")
         return None
 
     res = cv2.matchTemplate(img, template, cv2.TM_CCOEFF_NORMED)
     _, _, _, max_loc = cv2.minMaxLoc(res)
 
-    # Determine the size of the template
-    w, h = template.shape[::-1]
-
-    # Calculate the vertical center of the found template
-    vertical_center = max_loc[1] + h // 2
+    w, h = template.shape[::-1]  # 模板大小
+    vertical_center = max_loc[1] + h // 2  # 模板垂直中心
     img_height = img.shape[0]
     rotation_needed = 1 if vertical_center < img_height / 2 else 0
 
-    # If the circle is in the upper half, rotate the image
     if rotation_needed:
         img = rotate_image(img, 180)
-        # Save the rotated image
         cv2.imwrite('ruler.jpg', img)
-        print("Image rotated and saved as 'ruler.jpg'")
+        print("图像已旋转并保存为 'ruler.jpg'")
     else:
-        print("No rotation needed.")
+        print("无需旋转。")
 
-    # Draw rectangle for visualization
     top_left = max_loc
     bottom_right = (top_left[0] + w, top_left[1] + h)
     img_display = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
     cv2.rectangle(img_display, top_left, bottom_right, (255, 0, 0), 2)
     if show_flag:
-        cv2.imshow('Template Matching', img_display)
+        cv2.imshow('模板匹配', img_display)
         cv2.waitKey(0)
         cv2.destroyAllWindows()
 
@@ -101,13 +98,13 @@ def merge_overlapping_rectangles(rectangles):
         rectangles = [r for r in rectangles if r]
     return rectangles
 
-
+# 函数：计算植物的长度
 def calculate_plant_length(rect, pixels_per_cm):
     x, y, w, h = rect
     plant_length_cm = max(w, h) / pixels_per_cm
     return plant_length_cm
 
-
+# 函数：图像分割，用于提取图像中的重要部分
 def image_segmentation(image_path):
     image = cv2.imread(image_path)
     gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
@@ -116,12 +113,12 @@ def image_segmentation(image_path):
     edges = cv2.Canny(binary_thresh, 50, 150)
     contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-    # Calculate bounding rectangles
+    # 计算矩形
     rectangles = [cv2.boundingRect(cnt) for cnt in contours if cv2.arcLength(cnt, True) > 550]
     merged_rectangles = merge_overlapping_rectangles(rectangles)
 
-    # Filter and save the results
-    min_area = 60000  # Minimum area threshold
+    # 去除不符合条件的矩形
+    min_area = 60000  # 最小面积
     for rect in merged_rectangles:
         x, y, w, h = rect
         area = w * h
@@ -133,10 +130,9 @@ def image_segmentation(image_path):
             else:
                 cv2.imwrite('plant_{}_{}.jpg'.format(x, y), extracted)  # Naming by position to avoid overwrites
 
-    # Display the processed image with rectangles
     image_with_rectangles = image.copy()
     for x, y, w, h in merged_rectangles:
-        if w * h > min_area:  # Directly using the rectangle dimensions
+        if w * h > min_area:
             cv2.rectangle(image_with_rectangles, (x, y), (x + w, y + h), (0, 255, 0), 2)
     if show_flag:
         plt.imshow(cv2.cvtColor(image_with_rectangles, cv2.COLOR_BGR2RGB))
@@ -144,7 +140,7 @@ def image_segmentation(image_path):
         plt.axis('off')
         plt.show()
 
-
+# 计算每厘米代表的像素数
 def calculate_pixels_per_cm():
     image_path = 'ruler.jpg'
     ruler_image = cv2.imread(image_path, 0)  # 以灰度模式加载
@@ -215,117 +211,7 @@ def calculate_angle(pt1, pt2, pt3):
     angle = np.degrees(theta)
     return angle
 
-
-def calculate_angles(image_path):
-    # 读取图像
-    image = io.imread(image_path)
-
-    # 调整图像大小
-    # resized_image = transform.resize(image, (512, 512))  # 调整为 512x512 大小，可以根据实际情况调整大小
-
-    # 转换为灰度图像
-    gray_image = color.rgb2gray(image)
-
-    # 应用高斯模糊
-    blurred_image = gaussian(gray_image, sigma=1)  # sigma 控制模糊的程度
-
-    # 应用阈值来二值化图像
-    # 使用大津算法找到一个阈值
-    thresh = filters.threshold_otsu(blurred_image)
-    binary_image = blurred_image > thresh
-
-    # 应用骨架化算法
-    skeleton = morphology.skeletonize(binary_image)
-
-    # 试着使用更小的形态学操作，或者减少操作的强度
-    from skimage.morphology import binary_dilation
-    cleaned_skeleton = binary_dilation(skeleton)  # 使用轻微的膨胀可能有助于恢复某些细节
-
-    if show_flag:
-        # 显示原图、骨架图和去毛刺后的骨架图
-        fig, axes = plt.subplots(nrows=1, ncols=3, figsize=(12, 4), sharex=True, sharey=True)
-        ax = axes.ravel()
-
-        ax[0].imshow(binary_image, cmap=plt.cm.gray)
-        ax[0].axis('off')
-        ax[0].set_title('Binary Image', fontsize=20)
-
-        ax[1].imshow(skeleton, cmap=plt.cm.gray)
-        ax[1].axis('off')
-        ax[1].set_title('Initial Skeleton', fontsize=20)
-
-        ax[2].imshow(cleaned_skeleton, cmap=plt.cm.gray)
-        ax[2].axis('off')
-        ax[2].set_title('Cleaned Skeleton', fontsize=20)
-
-        fig.tight_layout()
-        plt.show()
-
-    # Convert the cleaned skeleton to uint8 before finding contours
-    cleaned_skeleton_uint8 = (cleaned_skeleton * 255).astype(np.uint8)
-
-    # 设置轮廓的最小长度阈值
-    min_contour_length = 40
-
-    # 查找所有的轮廓
-    contours, _ = cv2.findContours(cleaned_skeleton_uint8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-    # 过滤掉太短的轮廓
-    long_contours = [contour for contour in contours if cv2.arcLength(contour, True) > min_contour_length]
-
-    # 创建一个全黑的背景
-    straight_lines_img = np.zeros_like(cleaned_skeleton_uint8)
-
-    # 设置近似的精确度
-    epsilon_factor = 0.008
-
-    # 对于每个较长轮廓，应用多边形近似，并画出结果
-    for contour in long_contours:
-        epsilon = epsilon_factor * cv2.arcLength(contour, True)
-        approx = cv2.approxPolyDP(contour, epsilon, True)
-        cv2.drawContours(straight_lines_img, [approx], -1, (255), 1)
-
-    # 输出图像
-    output_path = 'straight_skeleton.png'
-    cv2.imwrite(output_path, straight_lines_img)
-
-    # 加载骨架图像
-    image = cv2.imread('straight_skeleton.png', cv2.IMREAD_GRAYSCALE)
-    _, binary_image = cv2.threshold(image, 127, 255, cv2.THRESH_BINARY)
-
-    # 查找轮廓
-    contours, _ = cv2.findContours(binary_image, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-    # 创建一个彩色图像以标记尖角
-    marked_image = cv2.cvtColor(binary_image, cv2.COLOR_GRAY2BGR)
-
-    # 对于每个轮廓
-    sharp_angle_count = 0
-    for contour in contours:
-        # 需要至少3个点来形成角
-        if len(contour) >= 3:
-            for i in range(len(contour)):
-                pt1 = contour[i % len(contour)][0]
-                pt2 = contour[(i + 1) % len(contour)][0]
-                pt3 = contour[(i + 2) % len(contour)][0]
-                angle = calculate_angle(pt1, pt2, pt3)
-
-                # 如果角度小于90度，则在图像上标记
-                if angle < 90:
-                    sharp_angle_count += 1
-                    cv2.circle(marked_image, tuple(pt2), 3, (0, 0, 255), -1)  # 使用红色圆圈标记
-    if show_flag:
-        # 显示标记过的图像
-        cv2.imshow('Marked Image', marked_image)
-        cv2.waitKey(0)
-        cv2.destroyAllWindows()
-
-    # 保存标记过的图像
-    output_path = 'marked_straight_skeleton.png'
-    cv2.imwrite(output_path, marked_image)
-    return sharp_angle_count - 1
-
-
+# 计算植物长度的函数
 def calculate_length_of_plants(directory, pixels_per_cm):
     lengths = []  # 用于存储所有图片的长度
     branch_nums = []  # 用于存储所有图片的分支数
@@ -346,11 +232,10 @@ def calculate_length_of_plants(directory, pixels_per_cm):
             height, width, _ = image.shape
 
             # 计算长度和宽度的厘米数
-            length_cm = max(height, width) / pixels_per_cm
+            length_cm = round(max(height, width) / pixels_per_cm, 2)
             lengths.append(length_cm)
 
-            # 此处假设calculate_angles是前文定义的计算分支数的函数
-            branch_count = skeleton_points(filepath)  # 添加计算分支的函数调用
+            branch_count = skeleton_points(filepath, output_directory)  # 添加计算分支的函数调用
             branch_nums.append(branch_count)
 
             # 输出结果
@@ -362,213 +247,101 @@ def calculate_length_of_plants(directory, pixels_per_cm):
     return lengths, branch_nums
 
 
-def skeleton_points(image_path):
-    from skimage import io, color, morphology, filters, transform
-
-    # 读取图
+def skeleton_points(image_path, output_directory):
+    # 加载图像
     image = io.imread(image_path)
+    if image.ndim == 3 and image.shape[2] == 4:  # 如果是RGBA格式，去除alpha通道
+        image = image[..., :3]
 
-    # 调整图像大小
-    resized_image = transform.resize(image, (512, 512))  # 调整为 512x512 大小，可以根据实际情况调整大小
+    # 调整图像大小并标准化
+    resized_image = transform.resize(image, (512, 512), anti_aliasing=True)
 
-    # 转换为灰度图像
+    # 转换为灰度图
     gray_image = color.rgb2gray(resized_image)
 
     # 应用高斯模糊
-    blurred_image = gaussian(gray_image, sigma=1)  # sigma 控制模糊的程度
+    blurred_image = filters.gaussian(gray_image, sigma=3)
 
-    # 应用阈值来二值化图像
-    # 使用大津算法找到一个阈值
+    # 使用大津阈值进行二值化
     thresh = filters.threshold_otsu(blurred_image)
     binary_image = blurred_image > thresh
 
-    # 应用骨架化算法
+    # 骨架化
     skeleton = morphology.skeletonize(binary_image)
 
-    # 试着使用更小的形态学操作，或者减少操作的强度
-    from skimage.morphology import binary_dilation
-    cleaned_skeleton = binary_dilation(skeleton)  # 使用轻微的膨胀可能有助于恢复某些细节
-
-    # 显示原图、骨架图和去毛刺后的骨架图
-    fig, axes = plt.subplots(nrows=1, ncols=3, figsize=(12, 4), sharex=True, sharey=True)
-    ax = axes.ravel()
-    if show_flag:
-        ax[0].imshow(binary_image, cmap=plt.cm.gray)
-        ax[0].axis('off')
-        ax[0].set_title('Binary Image', fontsize=20)
-
-        ax[1].imshow(skeleton, cmap=plt.cm.gray)
-        ax[1].axis('off')
-        ax[1].set_title('Initial Skeleton', fontsize=20)
-
-        ax[2].imshow(cleaned_skeleton, cmap=plt.cm.gray)
-        ax[2].axis('off')
-        ax[2].set_title('Cleaned Skeleton', fontsize=20)
-
-        fig.tight_layout()
-        plt.show()
-
-    # 保存去毛刺后的骨架图像
-    skeleton_image_path = 'cleaned_skeleton.png'
-    plt.imsave(skeleton_image_path, cleaned_skeleton, cmap=plt.cm.gray)
-
-    from skimage import io, morphology, util, color
-    from skimage.morphology import skeletonize
-    from skimage.util import img_as_bool
-
-    # 加载骨架图像
-    skeleton_image = io.imread('cleaned_skeleton.png')
-
-    # 将图像转换为布尔值
-    skeleton = util.img_as_bool(skeleton_image)
-
-    # 如果图像有4个通道，假设最后一个通道是alpha通道，可以舍弃
-    if skeleton.ndim == 3 and skeleton.shape[2] == 4:
-        # 只取前三个通道
-        skeleton = skeleton[..., :3]
-
-    # 将图像转换为灰度
-    skeleton_gray = color.rgb2gray(skeleton)
-
-    # 确保图像是布尔类型
-    skeleton_bool = img_as_bool(skeleton_gray)
-
-    selem = morphology.disk(1)  # 可以调整大小
-
-    # 现在执行形态学操作
-    cleaned = morphology.binary_opening(skeleton_bool, selem)
-    # 使用形态学开运算去除毛刺
-
-
-    # 可选：移除小的连通组件
-    cleaned = morphology.remove_small_objects(cleaned, min_size=100)  # min_size 也可以调整
-
-    # 可选：继续使用其他形态学操作如闭运算来平滑结果
-    # selem = morphology.disk(1)  # 可以调整大小
-    cleaned = morphology.binary_closing(cleaned, selem)
-
-    # 骨架化处理后的清理图像
-    cleaned_skeleton = skeletonize(cleaned)
-
-    # 保存处理后的图像
-    io.imsave('cleaned_skeleton_without_spurs.png', util.img_as_ubyte(cleaned_skeleton))
-
-
-
-
-
-    from skimage.io import imread, imsave
-    from skimage.morphology import skeletonize, binary_dilation, disk
-    from skimage.util import img_as_bool, invert
-    from skimage import img_as_ubyte  # Import this function
-
-    # Read the skeleton image
-    skeleton_image_path = 'cleaned_skeleton_without_spurs.png'
-    skeleton_image = imread(skeleton_image_path, as_gray=True)
-
-    # Convert to boolean array
-    skeleton_bool = img_as_bool(skeleton_image)
-
-    # Dilate the skeleton image to make it thicker, this may remove small branches
-    dilated_skeleton = binary_dilation(skeleton_bool, disk(50))
-
-    # Skeletonize again to make sure it's a single-pixel skeleton
-    thick_skeleton = skeletonize(dilated_skeleton)
-
-    # Convert the image to uint8 format before saving
-    thick_skeleton_uint8 = img_as_ubyte(invert(thick_skeleton))
-
-    # Save the resulting image
-    thick_skeleton_image_path = 'thick_skeleton.png'
-    imsave(thick_skeleton_image_path, thick_skeleton_uint8)  # Save as uint8 image
-
-    # Provide the path of the saved image
-    print(thick_skeleton_image_path)
-
-
-    from skimage.io import imread
-    from skimage.morphology import skeletonize
-    from scipy.ndimage import convolve
-    import numpy as np
-
-    # Load the skeleton image
-    image_path = 'thick_skeleton.png'
-    skeleton_image = imread(image_path, as_gray=True)
-    skeleton = skeleton_image > 127  # Adjust this threshold based on your image
-
-    # Invert the skeleton if necessary
-    skeleton = np.invert(skeleton)
-
-    # Make sure it's a skeleton
-    skeleton = skeletonize(skeleton)
-
-    # Define a kernel to count neighbors
-    kernel = np.array([[1, 1, 1],
-                       [1, 10, 1],
-                       [1, 1, 1]], dtype=np.uint8)
-
-    # Convolve skeleton with the kernel
+    # 检测端点
+    kernel = np.array([[1, 1, 1], [1, 10, 1], [1, 1, 1]], dtype=np.uint8)
     neighbor_count = convolve(skeleton.astype(np.uint8), kernel, mode='constant', cval=0)
-
-    # Endpoints have exactly one neighbor
     endpoints = (neighbor_count == 11)
 
-    # Count endpoints
-    num_endpoints = np.sum(endpoints)
-    print(f"Number of endpoints: {num_endpoints}")
-    return num_endpoints - 1
+    # 排除图像下四分之一和中央带区域的端点
+    height, width = endpoints.shape
+    bottom_quarter_start = 3 * height // 4
+    central_band_start = height // 4
+    central_band_end = 3 * height // 4
 
+    endpoints[bottom_quarter_start:, :] = False
+    endpoints[central_band_start:central_band_end, width // 4:3 * width // 4] = False
 
-# Assuming the following functions are defined:
-# - image_segmentation(image_path)
-# - match_template_and_rotate_if_necessary(image_path, template_path)
-# - calculate_pixels_per_cm()
-# - calculate_length_of_plants(directory, pixels_per_cm)
-# - calculate_angles(image_path)
+    # 将灰度图转换回RGB以便进行标记
+    marked_image = color.gray2rgb(gray_image)
 
-# Directory containing the images
+    # 通过标记更大的区域使端点更明显
+    for y, x in np.argwhere(endpoints):
+        size = 3  # 标记区域的半径
+        slice_y = slice(max(0, y - size), min(marked_image.shape[0], y + size + 1))
+        slice_x = slice(max(0, x - size), min(marked_image.shape[1], x + size + 1))
+
+        marked_image[slice_y, slice_x, 0] = 1  # 红色通道
+        marked_image[slice_y, slice_x, 1] = 0  # 绿色通道
+        marked_image[slice_y, slice_x, 2] = 0  # 蓝色通道
+
+    # 确保输出目录存在
+    os.makedirs(output_directory, exist_ok=True)
+
+    # 定义带有正确扩展名的保存路径
+    save_path = os.path.join(output_directory, os.path.basename(image_path).split('.')[0] + '_marked.png')
+
+    # 保存显示的图像以确保显示与保存一致
+    plt.imsave(save_path, marked_image)
+    print(f"已保存标记图像到 {save_path}")
+
+    return np.sum(endpoints)
+
+# 图片路径
 img_directory = 'img'
-
-# Path to the ruler and template images
+# 模版路径
 ruler_image_path = 'ruler.jpg'
 template_path = 'circle.jpg'
-
-# Calculate pixels per cm using the ruler image
-
-
-# Prepare lists to store the results
+output_directory = 'output'
+# 存储结果的list
 all_lengths = []
 all_branch_nums = []
 
-# Iterate through all .jpg files in the img directory
+# 对文件夹内所有jpg文件进行操作
 for filename in os.listdir(img_directory):
     if filename.endswith('.jpg'):
-        # Construct the full image path
+        # 图片绝对路径构建
         image_path = os.path.join(img_directory, filename)
 
-        # Perform image segmentation
+        # 图片分割
         image_segmentation(image_path)
 
-        # Perform template matching and possible rotation
         rotation_flag = match_template_and_rotate_if_necessary(ruler_image_path, template_path)
         print(f"Rotation flag for {filename}: {rotation_flag} (1 means rotated, 0 means not rotated)")
         pixels_per_cm = calculate_pixels_per_cm()
-        # Calculate the length and number of branches
         current_directory = os.getcwd()  # 获取当前工作目录
-
         length, branch_num = calculate_length_of_plants(current_directory, pixels_per_cm)
         print(f"{filename}: Length = {length}, Number of Branches = {branch_num}")
 
-        # Store the results
+        # 保存结果
         all_lengths.append(length)
         all_branch_nums.append(branch_num)
-# Write the results to a CSV file
+# 结果写入csv
 csv_file_path = 'plant_measurements.csv'
 with open(csv_file_path, mode='w', newline='') as file:
     writer = csv.writer(file)
-    # Write the header
     writer.writerow(['Image Name', 'Length (cm)', 'Number of Branches'])
-    # Write the data
     for i, filename in enumerate(os.listdir(img_directory)):
         if filename.endswith('.jpg'):
             writer.writerow([filename, all_lengths[i], all_branch_nums[i]])
